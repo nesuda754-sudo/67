@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>✊✌️✋ на троих</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    color: #eee; margin: 0; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .screen {
+    background: rgba(255,255,255,0.05); border-radius: 20px;
+    padding: 30px; max-width: 500px; width: 100%;
+    backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1);
+  }
+  .hidden { display: none !important; }
+  h1, h2 { text-align: center; margin-top: 0; }
+  h1 { font-size: 26px; }
+  input {
+    width: 100%; padding: 12px; margin: 8px 0; border-radius: 10px;
+    border: 1px solid #444; background: #0f0f1a; color: #fff; font-size: 16px;
+  }
+  button {
+    padding: 12px 20px; border-radius: 10px; border: none;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: #fff; font-size: 16px; cursor: pointer; width: 100%;
+    margin: 5px 0; font-weight: 600; transition: transform 0.1s;
+  }
+  button:hover:not(:disabled) { transform: scale(1.02); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .join-row { display: flex; gap: 8px; }
+  .join-row input { flex: 1; }
+  .join-row button { width: auto; }
+  #roomCode { text-align: center; font-size: 13px; color: #9af; word-break: break-all; margin: 10px 0; font-family: monospace; }
+  #playerList { list-style: none; padding: 0; }
+  #playerList li { padding: 10px; margin: 5px 0; background: rgba(255,255,255,0.05); border-radius: 8px; }
+  .choices { display: flex; gap: 10px; justify-content: center; margin: 20px 0; }
+  .choices button { font-size: 48px; padding: 15px; flex: 1; background: rgba(255,255,255,0.1); }
+  .choices button:hover:not(:disabled) { background: rgba(255,255,255,0.2); }
+  .choices button.selected { background: linear-gradient(135deg, #667eea, #764ba2); }
+  .scoreboard { margin: 15px 0; }
+  .score-row { display: flex; justify-content: space-between; align-items: center; padding: 10px; margin: 5px 0; border-radius: 8px; background: rgba(255,255,255,0.05); }
+  .score-row.me { background: rgba(102, 126, 234, 0.25); border: 1px solid #667eea; }
+  .pick-emoji { font-size: 22px; }
+  .status { text-align: center; color: #aaa; margin-top: 15px; }
+  #resultTitle { color: #ffd700; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="screen-setup" class="screen">
+    <h1>✊✌️✋ на троих</h1>
+    <p style="text-align:center; color:#888;">Первый до 5 очков побеждает</p>
+    <input id="nameInput" placeholder="Твоё имя" maxlength="12">
+    <button onclick="createRoom()">🎮 Создать игру</button>
+    <div class="join-row">
+      <input id="codeInput" placeholder="Код комнаты">
+      <button onclick="joinRoom()">Войти</button>
+    </div>
+  </div>
+
+  <div id="screen-lobby" class="screen hidden">
+    <h2>Лобби</h2>
+    <p style="text-align:center; color:#888; margin:5px 0;">Код комнаты — скинь друзьям:</p>
+    <div id="roomCode"></div>
+    <ul id="playerList"></ul>
+    <button id="startBtn" class="hidden" onclick="hostStart()">▶️ Начать игру</button>
+    <p id="waitMsg" class="status"></p>
+  </div>
+
+  <div id="screen-game" class="screen hidden">
+    <h2>Раунд <span id="roundNum">1</span></h2>
+    <div class="scoreboard" id="scoreboard"></div>
+    <div class="choices" id="choices">
+      <button data-choice="rock">✊</button>
+      <button data-choice="scissors">✌️</button>
+      <button data-choice="paper">✋</button>
+    </div>
+    <div class="status" id="gameStatus"></div>
+  </div>
+
+  <div id="screen-result" class="screen hidden">
+    <h2 id="resultTitle"></h2>
+    <div class="scoreboard" id="resultBoard"></div>
+    <p class="status">Следующий раунд через пару секунд...</p>
+  </div>
+
+  <div id="screen-over" class="screen hidden">
+    <h2 id="winnerTitle"></h2>
+    <div class="scoreboard" id="finalBoard"></div>
+    <button onclick="location.reload()">🔄 Играть снова</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"><\/script>
+<script>
+const TARGET = 5;
+const EMOJI = {rock: '✊', scissors: '✌️', paper: '✋'};
+const BEATS = {rock: 'scissors', scissors: 'paper', paper: 'rock'};
+
+let peer = null, conns = {}, isHost = false, myId = null, myName = '';
+let players = {}, phase = 'setup', round = 0, roomCode = '';
+
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+  document.getElementById(id).classList.remove('hidden');
+}
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function createRoom() {
+  myName = document.getElementById('nameInput').value.trim() || 'Игрок';
+  isHost = true;
+  peer = new Peer();
+  peer.on('open', id => {
+    myId = id; roomCode = id;
+    players[id] = {name: myName, score: 0, pick: null};
+    phase = 'lobby';
+    render();
+  });
+  peer.on('error', e => alert('Ошибка подключения: ' + e.type));
+  peer.on('connection', conn => {
+    conn.on('open', () => {
+      conns[conn.peer] = conn;
+      conn.on('data', d => hostOnData(conn.peer, d));
+      conn.on('close', () => {
+        delete conns[conn.peer];
+        if (players[conn.peer]) {
+          delete players[conn.peer];
+          if (phase !== 'lobby') {
+            round = 0;
+            Object.values(players).forEach(p => { p.score = 0; p.pick = null; });
+            phase = 'lobby';
+          }
+          hostSync();
+        }
+      });
+    });
+  });
+}
+
+function joinRoom() {
+  myName = document.getElementById('nameInput').value.trim() || 'Игрок';
+  const hostId = document.getElementById('codeInput').value.trim();
+  if (!hostId) return alert('Введи код комнаты');
+  isHost = false;
+  peer = new Peer();
+  peer.on('open', id => {
+    myId = id;
+    const conn = peer.connect(hostId);
+    conns[hostId] = conn;
+    conn.on('open', () => {
+      conn.send({type: 'join', name: myName});
+      show('screen-lobby');
+      document.getElementById('roomCode').textContent = '(код у хоста)';
+      document.getElementById('waitMsg').textContent = 'Подключаемся...';
+    });
+    conn.on('data', d => clientOnData(d));
+    conn.on('close', () => { alert('Хост отключился'); location.reload(); });
+  });
+  peer.on('error', e => alert('Ошибка: ' + e.type + '\nПроверь код комнаты'));
+}
+
+function hostBroadcast(msg) {
+  Object.values(conns).forEach(c => { if (c.open) c.send(msg); });
+}
+function hostSync() {
+  render();
+  hostBroadcast({type: 'state', players, phase, round});
+}
+
+function hostOnData(connId, d) {
+  if (d.type === 'join') {
+    if (phase !== 'lobby' || Object.keys(players).length >= 3) {
+      conns[connId].send({type: 'error', msg: 'Комната заполнена или игра идёт'});
+      return;
+    }
+    players[connId] = {name: d.name, score: 0, pick: null};
+    hostSync();
+  } else if (d.type === 'pick') {
+    if (phase !== 'picking') return;
+    if (!players[connId] || players[connId].pick) return;
+    players[connId].pick = d.choice;
+    hostSync();
+    hostCheckPicks();
+  }
+}
+
+function clientOnData(d) {
+  if (d.type === 'state') {
+    players = d.players; phase = d.phase; round = d.round;
+    render();
+  } else if (d.type === 'error') {
+    alert(d.msg); location.reload();
+  }
+}
+
+function hostStart() {
+  if (Object.keys(players).length !== 3) return;
+  round = 0;
+  Object.values(players).forEach(p => { p.score = 0; p.pick = null; });
+  hostNextRound();
+}
+
+function hostNextRound() {
+  round++; phase = 'picking';
+  Object.values(players).forEach(p => p.pick = null);
+  hostSync();
+}
+
+function hostCheckPicks() {
+  const all = Object.values(players);
+  if (all.length === 3 && all.every(p => p.pick)) {
+    setTimeout(hostResolve, 250);
+  }
+}
+
+function hostResolve() {
+  const entries = Object.entries(players).map(([id, p]) => ({id, choice: p.pick}));
+  const kinds = [...new Set(entries.map(p => p.choice))];
+
+  if (kinds.length === 2) {
+    const [a, b] = kinds;
+    const winnerKind = BEATS[a] === b ? a : b;
+    entries.forEach(p => {
+      if (p.choice === winnerKind) players[p.id].score++;
+    });
+  }
+
+  phase = 'result';
+  hostSync();
+
+  const gameOver = Object.values(players).some(p => p.score >= TARGET);
+  setTimeout(() => {
+    if (gameOver) { phase = 'over'; hostSync(); }
+    else hostNextRound();
+  }, 3500);
+}
+
+function makePick(choice) {
+  if (phase !== 'picking') return;
+  if (players[myId]?.pick) return;
+  if (isHost) {
+    players[myId].pick = choice;
+    hostSync();
+    hostCheckPicks();
+  } else {
+    const hostId = Object.keys(conns)[0];
+    if (hostId && conns[hostId].open) {
+      conns[hostId].send({type: 'pick', choice});
+    }
+  }
+}
+
+document.getElementById('choices').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-choice]');
+  if (btn && !btn.disabled) makePick(btn.dataset.choice);
+});
+
+function render() {
+  if (phase === 'setup') return show('screen-setup');
+  if (phase === 'lobby') { show('screen-lobby'); return renderLobby(); }
+  if (phase === 'picking') { show('screen-game'); return renderGame(); }
+  if (phase === 'result') { show('screen-result'); return renderResult(); }
+  if (phase === 'over') { show('screen-over'); return renderOver(); }
+}
+
+function renderLobby() {
+  const list = document.getElementById('playerList');
+  const count = Object.keys(players).length;
+  list.innerHTML = Object.entries(players).map(([id, p]) =>
+    `<li>${esc(p.name)}${id === myId ? ' (ты)' : ''}</li>`
+  ).join('');
+  if (isHost) document.getElementById('roomCode').textContent = roomCode;
+  const startBtn = document.getElementById('startBtn');
+  const waitMsg = document.getElementById('waitMsg');
+  if (isHost) {
+    startBtn.classList.toggle('hidden', count !== 3);
+    waitMsg.textContent = count < 3 ? `Ждём игроков: ${count}/3` : 'Все готовы — жми «Начать»!';
+  } else {
+    startBtn.classList.add('hidden');
+    waitMsg.textContent = count < 3 ? `Ждём игроков: ${count}/3` : 'Ждём, когда хост начнёт...';
+  }
+}
+
+function scoreboardHtml(showPicks) {
+  return Object.entries(players).map(([id, p]) => {
+    const me = id === myId ? ' me' : '';
+    const pick = showPicks && p.pick ? `<span class="pick-emoji">${EMOJI[p.pick]}</span>` : '';
+    return `<div class="score-row${me}">
+      <span>${esc(p.name)}${me ? ' (ты)' : ''}</span>
+      <span>${pick} <strong>${p.score}</strong></span>
+    </div>`;
+  }).join('');
+}
+
+function renderGame() {
+  document.getElementById('roundNum').textContent = round;
+  document.getElementById('scoreboard').innerHTML = scoreboardHtml(false);
+  const myPick = players[myId]?.pick;
+  document.querySelectorAll('#choices button').forEach(btn => {
+    btn.classList.toggle('selected', btn.dataset.choice === myPick);
+    btn.disabled = !!myPick;
+  });
+  const ready = Object.values(players).filter(p => p.pick).length;
+  const total = Object.keys(players).length;
+  document.getElementById('gameStatus').textContent = myPick
+    ? `Ты выбрал ${EMOJI[myPick]}. Ждём остальных: ${ready}/${total}`
+    : 'Делай выбор!';
+}
+
+function renderResult() {
+  const entries = Object.entries(players);
+  const kinds = [...new Set(entries.map(([id, p]) => p.pick))];
+  const title = document.getElementById('resultTitle');
+  if (kinds.length === 2) {
+    const [a, b] = kinds;
+    const wk = BEATS[a] === b ? a : b;
+    const winners = entries.filter(([id, p]) => p.pick === wk);
+    title.textContent = `🏆 Раунд за: ${winners.map(([id, p]) => p.name).join(', ')}`;
+  } else {
+    title.textContent = '🤝 Ничья в раунде';
+  }
+  document.getElementById('resultBoard').innerHTML = scoreboardHtml(true);
+}
+
+function renderOver() {
+  const winner = Object.entries(players).find(([id, p]) => p.score >= TARGET);
+  document.getElementById('winnerTitle').textContent =
+    winner ? `🎉 ${winner[1].name} побеждает!` : 'Игра окончена';
+  document.getElementById('finalBoard').innerHTML = scoreboardHtml(true);
+}
+<\/script>
+</body>
+</html>
